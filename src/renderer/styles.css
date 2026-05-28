@@ -298,6 +298,7 @@ p.subtitle {
   color: var(--text-secondary);
   font-weight: 500;
 }
+
 .form-group input {
   background: rgba(0,0,0,0.4);
   border: 1px solid var(--border);
@@ -582,4 +583,55 @@ input:checked + .toggle-slider:before {
 }
 .notice-box strong {
   color: var(--text-primary);
+}
+
+.host-ip-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,0.28);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.host-ip-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.host-ip-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.host-ip-value code {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,0.32);
+  border: 1px solid var(--border);
+  color: var(--success);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  user-select: text;
+}
+.ip-eye-button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.ip-eye-button svg {
+  pointer-events: none;
+}
+.ip-eye-button:hover {
+  color: var(--text-primary);
+  border-color: var(--border-active);
+  background: rgba(255,255,255,0.14);
 }

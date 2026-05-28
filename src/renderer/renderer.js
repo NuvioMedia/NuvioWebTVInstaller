@@ -35,6 +35,16 @@ const authorCertPathInput = document.getElementById('authorCertPath');
 const distributorCertPathInput = document.getElementById('distributorCertPath');
 const certPasswordInput = document.getElementById('certPassword');
 const logOutput = document.getElementById('log-output');
+let localIps = [];
+let showHostPcIp = false;
+
+async function loadLocalIps() {
+  const config = await window.installer?.getConfig?.();
+  localIps = config?.localIps || [];
+  setupInstallerUI();
+}
+
+loadLocalIps();
 
 // Navigation
 function setView(newView) {
@@ -110,18 +120,19 @@ function setupInstallerUI() {
   osNotice.style.display = 'block';
   
   const requiresSamsungSignIn = isSimple || autoGenerateCert.checked;
+  const samsungDevModeNote = `For Tizen devices, ensure Developer Mode is enabled on your TV. While enabling Developer Mode, enter this computer's IP address as the Host PC IP.${renderHostPcIpToggle()}`;
   
   if (isMulti) {
     if (requiresSamsungSignIn) {
-      osNoticeText.innerHTML = "<strong>Note:</strong> Provide the TV IP Address and the installer will attempt the chosen action. Samsung requires a Samsung account sign-in. LG requires a Developer Mode passphrase.";
+      osNoticeText.innerHTML = `<strong>Note:</strong> Provide the TV IP Address and the installer will attempt the chosen action. ${samsungDevModeNote} Samsung requires a Samsung account sign-in. LG requires a Developer Mode passphrase.`;
     } else {
-      osNoticeText.innerHTML = "<strong>Note:</strong> Provide the TV IP Address and the installer will attempt the chosen action. LG requires a Developer Mode passphrase.";
+      osNoticeText.innerHTML = `<strong>Note:</strong> Provide the TV IP Address and the installer will attempt the chosen action. ${samsungDevModeNote} LG requires a Developer Mode passphrase.`;
     }
   } else if (isSamsung) {
     if (requiresSamsungSignIn) {
-      osNoticeText.innerHTML = "<strong>Note:</strong> For Tizen devices, ensure Developer Mode is enabled on your TV. You will also be prompted to sign in with your Samsung account during installation to automatically generate required developer certificates.";
+      osNoticeText.innerHTML = `<strong>Note:</strong> ${samsungDevModeNote} You will also be prompted to sign in with your Samsung account during installation to automatically generate required developer certificates.`;
     } else {
-      osNoticeText.innerHTML = "<strong>Note:</strong> For Tizen devices, ensure Developer Mode is enabled on your TV.";
+      osNoticeText.innerHTML = `<strong>Note:</strong> ${samsungDevModeNote}`;
     }
   } else {
     osNoticeText.innerHTML = "<strong>Note:</strong> For WebOS devices, ensure Developer Mode is enabled and you have the Developer Mode Passphrase from the TV.";
@@ -134,6 +145,20 @@ function setupInstallerUI() {
   // Custom Tizen options
   samsungCertOptions.classList.toggle('hidden', isSimple || !(isSamsung || isMulti));
 }
+
+function renderHostPcIpToggle() {
+  const visibleIp = localIps.length ? localIps.join(' or ') : 'Unable to detect';
+  const hiddenIp = localIps.length ? '*****' : 'Unable to detect';
+  const eyeIcon = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+
+  return `<span class="host-ip-card"><span class="host-ip-label">Host PC IP:</span><span class="host-ip-value"><code>${showHostPcIp ? visibleIp : hiddenIp}</code><button type="button" class="ip-eye-button" id="btn-host-ip-eye" aria-label="${showHostPcIp ? 'Hide' : 'Show'} computer IP" aria-pressed="${showHostPcIp}">${eyeIcon}</button></span></span>`;
+}
+
+osNotice.addEventListener('click', (event) => {
+  if (event.target?.id !== 'btn-host-ip-eye') return;
+  showHostPcIp = !showHostPcIp;
+  setupInstallerUI();
+});
 
 autoGenerateCert.addEventListener('change', (e) => {
   manualCertFields.classList.toggle('hidden', e.target.checked);

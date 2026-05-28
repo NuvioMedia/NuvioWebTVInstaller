@@ -1,106 +1,106 @@
 # Nuvio TV Installer
 
-Programma desktop per installare, aggiornare, avviare e disinstallare Nuvio su:
+Desktop app to install, update, launch, and uninstall Nuvio on:
 
-- Samsung TV Tizen
-- LG TV webOS
+- Samsung Tizen TVs
+- LG webOS TVs
 
-Per Samsung il flusso e' pensato come una versione Nuvio di TizenBrewInstaller: cambia il pacchetto installato, che e' il WGT Nuvio pubblicato nella release GitHub.
+For Samsung, the flow is designed as a Nuvio version of TizenBrewInstaller: the installed package is the Nuvio WGT published in the GitHub release.
 
-L'app scarica automaticamente l'ultimo pacchetto Nuvio dalla release GitHub configurata in `installer.config.json`.
+The app automatically downloads the latest Nuvio package from the GitHub release configured in `installer.config.json`.
 
-Azioni disponibili nell'app:
+Available actions in the app:
 
-- `Installa / Aggiorna`: usa lo stesso flusso per prima installazione e aggiornamento. Scarica l'ultima release GitHub.
-- `Avvia`: apre Nuvio sulla TV.
-- `Disinstalla`: rimuove Nuvio dalla TV.
+- `Install / Update`: uses the same flow for first installation and updates. Downloads the latest GitHub release.
+- `Launch`: opens Nuvio on the TV.
+- `Uninstall`: removes Nuvio from the TV.
 
-## Avvio
+## Start
 
-Per sviluppo:
+For development:
 
 ```bash
 npm install
 npm start
 ```
 
-Per creare il pacchetto:
+To build the package:
 
 ```bash
 npm run dist:win
 npm run dist:mac
 ```
 
-Con la configurazione attuale vengono generati app avviabili standalone, senza installer:
+With the current configuration, standalone runnable apps are generated without an installer:
 
-- `dist/Nuvio-TV-Installer-<version>-Windows.exe` per Windows
-- `dist/mac-arm64/Nuvio TV Installer.app` per macOS Apple Silicon
+- `dist/Nuvio-TV-Installer-<version>-Windows.exe` for Windows
+- `dist/mac-arm64/Nuvio TV Installer.app` for macOS Apple Silicon
 
-## Pacchetti App
+## App Packages
 
-LG usa un file `.ipk`.
+LG uses an `.ipk` file.
 
-Samsung usa un file `.wgt`. Non serve per forza Tizen Studio per creare il WGT di Nuvio: dalla repo principale puoi generarlo con:
+Samsung uses a `.wgt` file. Tizen Studio is not strictly required to create the Nuvio WGT. From the main repo, you can generate it with:
 
 ```bash
 npm run package:tizen
 ```
 
-Il WGT generato usa il `nuvio.env.js` locale della repo.
+The generated WGT uses the repo's local `nuvio.env.js`.
 
-L'installer scarica automaticamente l'asset corretto dall'ultima release GitHub:
+The installer automatically downloads the correct asset from the latest GitHub release:
 
-- `.ipk` per LG
-- `.wgt` per Samsung
+- `.ipk` for LG
+- `.wgt` for Samsung
 
 ## Samsung TV
 
-Prima di usare l'installer:
+Before using the installer:
 
-1. Apri `Apps` sulla TV.
-2. Premi `12345` sul telecomando.
-3. Attiva `Developer Mode`.
-4. Inserisci come `Host PC IP` l'IP del computer.
-5. Riavvia la TV.
+1. Open `Apps` on the TV.
+2. Press `12345` on the remote.
+3. Enable `Developer Mode`.
+4. Enter the computer IP as `Host PC IP`.
+5. Restart the TV.
 
-Per Samsung l'installer prova prima la connessione diretta usata da TizenBrewInstaller, senza richiedere `sdb` installato sul PC. Se la connessione diretta non riesce, prova `sdb` come fallback se presente.
+For Samsung, the installer first tries the direct connection used by TizenBrewInstaller, without requiring `sdb` to be installed on the PC. If the direct connection fails, it tries `sdb` as a fallback when available.
 
-Il comando `tizen` non e' richiesto per il flusso principale.
+The `tizen` command is not required for the main flow.
 
-L'installer prova a:
+The installer tries to:
 
-1. connettersi direttamente alla TV in Developer Mode;
-2. scaricare e copiare il WGT Nuvio sulla TV;
-3. installarlo con `vd_appinstall`, come fanno TizenBrew/TizenBrewInstaller;
-4. usare fallback `sdb` o `tizen` solo se presenti.
+1. connect directly to the TV in Developer Mode;
+2. download and copy the Nuvio WGT to the TV;
+3. install it with `vd_appinstall`, like TizenBrew/TizenBrewInstaller;
+4. use `sdb` or `tizen` fallbacks only when available.
 
-### Firma Samsung
+### Samsung Signing
 
-L'installer usa lo stesso approccio di TizenBrewInstaller:
+The installer uses the same approach as TizenBrewInstaller:
 
-- legge la DUID della TV;
-- al primo uso apre il login Samsung Account e usa internet per creare il certificato;
-- crea un certificato Samsung per quella TV;
-- salva il certificato nella cartella dati dell'app;
-- rifirma automaticamente il `.wgt` prima di installarlo.
+- reads the TV DUID;
+- opens Samsung Account login on first use and uses the internet to create the certificate;
+- creates a Samsung certificate for that TV;
+- saves the certificate in the app data folder;
+- automatically re-signs the `.wgt` before installing it.
 
-Non devi fornire file `.p12` manuali.
+You do not need to provide manual `.p12` files.
 
 ## LG TV
 
-Per LG l'app include `@webos-tools/cli`, quindi l'utente non deve installare manualmente LG webOS SDK CLI o `ares-install`.
+For LG, the app includes `@webos-tools/cli`, so the user does not need to manually install the LG webOS SDK CLI or `ares-install`.
 
-Prima di usare l'installer:
+Before using the installer:
 
-1. Installa e apri l'app `Developer Mode` sulla TV LG.
-2. Attiva Developer Mode.
-3. Attiva `Key Server`.
-4. Leggi la passphrase mostrata dall'app Developer Mode.
-5. Nell'installer seleziona `LG TV`, inserisci IP e passphrase, poi premi `Installa / Aggiorna`.
+1. Install and open the `Developer Mode` app on the LG TV.
+2. Enable Developer Mode.
+3. Enable `Key Server`.
+4. Read the passphrase shown by the Developer Mode app.
+5. In the installer, select `LG TV`, enter the IP and passphrase, then press `Install / Update`.
 
-Il nome device LG e' opzionale. Se lo lasci vuoto, l'installer crea automaticamente un device locale partendo dall'IP della TV.
+The LG device name is optional. If you leave it empty, the installer automatically creates a local device from the TV IP.
 
-L'app usa internamente:
+The app internally uses:
 
 ```text
 ares-setup-device
@@ -109,13 +109,13 @@ ares-install
 ares-launch
 ```
 
-Se la TV era gia' stata configurata in passato, puoi anche inserire solo il nome device o l'IP e lasciare vuota la passphrase.
+If the TV was already configured in the past, you can also enter only the device name or IP and leave the passphrase empty.
 
-Nota: `@webos-tools/cli` porta molte dipendenze npm transitive. Questo non significa che l'app sia automaticamente pericolosa, ma aumenta manutenzione, dimensione del pacchetto e possibilita' di falsi positivi negli antivirus. Per una distribuzione pubblica pulita resta consigliata la firma dell'app.
+Note: `@webos-tools/cli` brings many transitive npm dependencies. This does not mean the app is automatically dangerous, but it increases maintenance, package size, and the chance of antivirus false positives. For clean public distribution, app signing is still recommended.
 
-## Configurazione GitHub
+## GitHub Configuration
 
-Modifica `installer.config.json`:
+Edit `installer.config.json`:
 
 ```json
 {
@@ -133,16 +133,16 @@ Modifica `installer.config.json`:
 }
 ```
 
-La release GitHub deve contenere almeno:
+The GitHub release must contain at least:
 
-- un asset `.ipk` per LG;
-- un asset `.wgt` per Samsung.
+- one `.ipk` asset for LG;
+- one `.wgt` asset for Samsung.
 
-## Note Antivirus
+## Antivirus Notes
 
-Nessun tool puo' garantire che un exe non venga mai segnalato. Per ridurre i falsi positivi:
+No tool can guarantee that an exe will never be flagged. To reduce false positives:
 
-- firma l'exe con un certificato code-signing;
-- evita download dinamici di tool non necessari;
-- pubblica build riproducibili da una repo pulita;
-- non includere dipendenze npm vulnerabili se non servono davvero.
+- sign the exe with a code-signing certificate;
+- avoid dynamic downloads of unnecessary tools;
+- publish reproducible builds from a clean repo;
+- do not include vulnerable npm dependencies unless they are truly needed.
