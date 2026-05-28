@@ -1,0 +1,5 @@
+This project is based on https://github.com/Samsung/webIDE-common-tizentv. Most of the logic was reused in this project.
+The reused logics were primarily for certificate creation, certificate fetching for Samsung certificates and package signing.
+
+The original project is licensed under the Apache License, Version 2.0.
+See LICENSE_APACHE2 for details.

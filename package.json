@@ -1,0 +1,42 @@
+{
+  "name": "nuvio-web-tv-installer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop installer for Nuvio TV webOS and Samsung Tizen builds.",
+  "author": "NuvioMedia",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis --x64",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.8.10",
+    "jszip": "^3.10.1",
+    "node-forge": "^1.3.1"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "space.nuvio.tvinstaller",
+    "productName": "Nuvio TV Installer",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "installer.config.json",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "Nuvio-TV-Installer-${version}-Setup.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    }
+  }
+}

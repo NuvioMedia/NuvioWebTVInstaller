@@ -1,0 +1,16 @@
+{
+  "githubRepo": "NuvioMedia/NuvioWeb",
+  "webos": {
+    "appId": "space.nuvio.webos",
+    "assetPattern": "\\.ipk$"
+  },
+  "tizen": {
+    "appId": "NuvioTV.NuvioTV",
+    "packageId": "NuvioTV",
+    "appIds": [
+      "NuvioTV.NuvioTV",
+      "NuvioTV"
+    ],
+    "assetPattern": "\\.wgt$"
+  }
+}
