@@ -40,7 +40,7 @@ const certPasswordInput = document.getElementById('certPassword');
 const logOutput = document.getElementById('log-output');
 let localIps = [];
 let showHostPcIp = false;
-let installInProgress = false;
+let actionInProgress = false;
 
 async function loadLocalIps() {
   const config = await window.installer?.getConfig?.();
@@ -170,12 +170,12 @@ autoGenerateCert.addEventListener('change', (e) => {
 });
 
 btnBrowseAuthor.addEventListener('click', async () => {
-  const file = await window.electron.selectFile();
+  const file = await window.installer?.selectFile?.();
   if (file) authorCertPathInput.value = file;
 });
 
 btnBrowseDistributor.addEventListener('click', async () => {
-  const file = await window.electron.selectFile();
+  const file = await window.installer?.selectFile?.();
   if (file) distributorCertPathInput.value = file;
 });
 
@@ -188,13 +188,16 @@ function appendLog(text, type = 'info') {
   logOutput.scrollTop = logOutput.scrollHeight;
 }
 
-function setInstallInProgress(inProgress) {
-  installInProgress = inProgress;
+function setActionInProgress(inProgress, action = 'install') {
+  actionInProgress = inProgress;
   btnInstall.disabled = inProgress;
+  document.getElementById('btn-launch').disabled = inProgress;
+  document.getElementById('btn-uninstall').disabled = inProgress;
   btnInstall.classList.toggle('is-loading', inProgress);
   btnInstall.setAttribute('aria-busy', String(inProgress));
+  const loadingLabel = action === 'uninstall' ? 'Uninstalling...' : action === 'launch' ? 'Launching...' : 'Installing...';
   btnInstall.innerHTML = inProgress
-    ? '<span class="button-spinner" aria-hidden="true"></span><span>Installing...</span>'
+    ? `<span class="button-spinner" aria-hidden="true"></span><span>${loadingLabel}</span>`
     : 'Install';
 }
 
@@ -240,7 +243,7 @@ btnBrowse?.addEventListener('click', async () => {
 });
 
 async function runAction(action) {
-  if (action === 'install' && installInProgress) {
+  if (actionInProgress) {
     return;
   }
 
@@ -282,14 +285,14 @@ async function runAction(action) {
 
   if (window.installer?.run) {
     appendLog(`Starting ${action} on ${targetOs}...`, 'info');
-    if (action === 'install') setInstallInProgress(true);
+    setActionInProgress(true, action);
     try {
       const res = await window.installer.run(targetOs, action, options);
       if (!res.ok) {
         appendLog(`Failed: ${res.error}`, 'error');
       }
     } finally {
-      if (action === 'install') setInstallInProgress(false);
+      setActionInProgress(false);
     }
   } else {
     appendLog(`[MOCK] Running ${action} on ${targetOs} with IP ${ip}`, 'command');

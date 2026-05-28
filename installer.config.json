@@ -5,9 +5,13 @@
     "assetPattern": "\\.ipk$"
   },
   "tizen": {
-    "appId": "NuvioTV.NuvioTV",
-    "packageId": "NuvioTV",
+    "appId": "NuvioTV001.NuvioTV",
+    "packageId": "NuvioTV001",
     "appIds": [
+      "NuvioTV001.NuvioTV",
+      "NuvioTV001",
+      "NuvioTV001.Nuvio",
+      "Nuvio",
       "NuvioTV.NuvioTV",
       "NuvioTV"
     ],
