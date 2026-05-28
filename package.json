@@ -12,9 +12,12 @@
     "dist:mac": "electron-builder --mac"
   },
   "dependencies": {
+    "@webos-tools/cli": "^3.2.4",
     "@xmldom/xmldom": "^0.8.10",
+    "adbhost": "^0.0.2",
     "jszip": "^3.10.1",
-    "node-forge": "^1.3.1"
+    "node-forge": "^1.3.1",
+    "tizen": "https://github.com/reisxd/tizen.js/tarball/main"
   },
   "devDependencies": {
     "electron": "^33.4.11",
@@ -23,21 +26,34 @@
   "build": {
     "appId": "space.nuvio.tvinstaller",
     "productName": "Nuvio TV Installer",
+    "icon": "icon.png",
     "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "buildResources": "build"
+    },
     "files": [
       "src/**/*",
+      "build/icon.png",
       "installer.config.json",
       "package.json"
     ],
     "win": {
+      "icon": "icon.ico",
       "target": [
         {
-          "target": "dir",
-          "arch": ["x64"]
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
+    "portable": {
+      "artifactName": "Nuvio-TV-Installer-${version}-Windows.${ext}"
+    },
     "mac": {
+      "icon": "icon.icns",
       "target": [
         {
           "target": "dir"

@@ -23,46 +23,39 @@
           <h1 id="platform-title">Samsung TV</h1>
           <p id="platform-subtitle">Installa o aggiorna il pacchetto Tizen pubblicato nell'ultima release GitHub.</p>
         </div>
-        <span class="repo-pill" id="repo-pill">GitHub</span>
+        <div class="header-controls">
+          <label class="language-select">
+            <span id="language-label">Lingua</span>
+            <select id="language">
+              <option value="it">Italiano</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <span class="repo-pill" id="repo-pill">GitHub</span>
+        </div>
       </div>
 
       <form id="installer-form" class="form-grid">
+        <div class="guide-panel" id="guide-panel"></div>
+
         <label>
-          <span>IP TV</span>
+          <span id="ip-label">IP TV</span>
           <input id="ip" name="ip" placeholder="192.168.1.50" autocomplete="off" />
         </label>
         <label id="device-name-row" class="hidden">
-          <span>Nome device ares</span>
+          <span id="device-name-label">Nome device ares</span>
           <input id="deviceName" name="deviceName" placeholder="tv-lg-salone" autocomplete="off" />
         </label>
-        <div id="samsung-signing-fields" class="signing-grid">
-          <label>
-            <span>Author cert .p12 opzionale</span>
-            <input id="authorCertPath" name="authorCertPath" placeholder="C:\\cert\\author.p12" autocomplete="off" />
-          </label>
-          <label>
-            <span>Password author cert</span>
-            <input id="authorCertPassword" name="authorCertPassword" type="password" autocomplete="off" />
-          </label>
-          <label>
-            <span>Distributor cert .p12 opzionale</span>
-            <input id="distributorCertPath" name="distributorCertPath" placeholder="C:\\cert\\distributor.p12" autocomplete="off" />
-          </label>
-          <label>
-            <span>Password distributor cert</span>
-            <input id="distributorCertPassword" name="distributorCertPassword" type="password" autocomplete="off" />
-          </label>
-        </div>
-        <label>
-          <span>Pacchetto locale opzionale</span>
-          <input id="packagePath" name="packagePath" placeholder="Vuoto = ultima release GitHub" autocomplete="off" />
+        <label id="lg-passphrase-row" class="hidden">
+          <span id="lg-passphrase-label">Passphrase Developer Mode LG</span>
+          <input id="lgPassphrase" name="lgPassphrase" type="password" autocomplete="off" />
         </label>
+        <input id="packagePath" name="packagePath" type="hidden" value="" />
 
         <div class="actions">
-          <button type="button" data-action="install">Installa</button>
-          <button type="button" data-action="update">Aggiorna</button>
-          <button type="button" data-action="launch">Avvia</button>
-          <button type="button" class="danger" data-action="uninstall">Disinstalla</button>
+          <button type="button" class="primary" data-action="install" id="install-button">Installa / Aggiorna</button>
+          <button type="button" data-action="launch" id="launch-button">Avvia</button>
+          <button type="button" class="danger" data-action="uninstall" id="uninstall-button">Disinstalla</button>
         </div>
       </form>
 
@@ -71,7 +64,7 @@
 
     <section class="log-panel">
       <div class="log-header">
-        <h2>Log</h2>
+        <h2 id="log-title">Log</h2>
         <button type="button" id="clear-log">Pulisci</button>
       </div>
       <pre id="log"></pre>

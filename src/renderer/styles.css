@@ -16,7 +16,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -37,7 +38,8 @@ input {
 
 .platform-button,
 .actions button,
-.log-header button {
+.log-header button,
+select {
   border: 1px solid #2c3440;
   border-radius: 8px;
   color: #f4f7fb;
@@ -92,7 +94,8 @@ h2 {
 }
 
 p,
-.requirements {
+.requirements,
+.guide-panel {
   color: #aab6c5;
   line-height: 1.5;
 }
@@ -111,9 +114,54 @@ p,
   font-size: 13px;
 }
 
+.header-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 1 auto;
+}
+
+.language-select {
+  display: grid;
+  gap: 6px;
+  min-width: 130px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.language-select select {
+  min-height: 34px;
+  padding: 0 10px;
+  background: #10151c;
+  outline: none;
+}
+
 .form-grid {
   display: grid;
   gap: 16px;
+}
+
+.guide-panel {
+  border: 1px solid #28313d;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #111820;
+  font-size: 14px;
+}
+
+.guide-panel h2 {
+  margin-bottom: 8px;
+  color: #f4f7fb;
+}
+
+.guide-panel ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.guide-panel li + li {
+  margin-top: 6px;
 }
 
 .signing-grid {
@@ -144,9 +192,13 @@ input:focus {
   border-color: #38bdf8;
 }
 
+select:focus {
+  border-color: #38bdf8;
+}
+
 .actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(180px, 1.35fr) repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 4px;
 }
@@ -158,6 +210,16 @@ input:focus {
 .actions button:hover,
 .log-header button:hover {
   background: #202936;
+}
+
+.actions button.primary {
+  border-color: #0f766e;
+  color: #d1fae5;
+  background: #12302f;
+}
+
+.actions button.primary:hover {
+  background: #17403d;
 }
 
 .actions button.danger {
@@ -222,6 +284,19 @@ pre {
   .platforms,
   .actions {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .panel-header,
+  .header-controls {
+    display: grid;
+  }
+
+  .header-controls {
+    justify-content: stretch;
+  }
+
+  .repo-pill {
+    max-width: 100%;
   }
 
   .actions,

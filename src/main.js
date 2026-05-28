@@ -1,19 +1,26 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const querystring = require("node:querystring");
 const { Readable } = require("node:stream");
+const adbhost = require("adbhost");
+const AdbPacket = require("adbhost/lib/packet.js");
 const JSZip = require("jszip");
 const forge = require("node-forge");
 const { DOMParser } = require("@xmldom/xmldom");
-const Signature = require("./vendor/tizen-js/src/packageSigner.js");
+const { Signature, SamsungCertificateCreator } = require("tizen");
 
 const configPath = path.join(__dirname, "..", "installer.config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
 const isWindows = process.platform === "win32";
+const appIconPath = path.join(__dirname, "..", "build", "icon.png");
+const adbCommands = AdbPacket.commands;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -22,6 +29,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 640,
     title: "Nuvio TV Installer",
+    icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -53,6 +61,7 @@ function emit(event, payload) {
 function executableCandidates(command) {
   const names = isWindows ? [`${command}.exe`, `${command}.bat`, `${command}.cmd`, command] : [command];
   const home = os.homedir();
+  const localBinDir = path.join(__dirname, "..", "node_modules", ".bin");
   const roots = isWindows
     ? [
         "C:\\tizen-studio",
@@ -64,7 +73,27 @@ function executableCandidates(command) {
       ];
 
   const tizenSubdir = command === "tizen" ? path.join("tools", "ide", "bin") : "tools";
-  return roots.flatMap((root) => names.map((name) => path.join(root, tizenSubdir, name)));
+  return [
+    ...names.map((name) => path.join(localBinDir, name)),
+    ...webOsCliCandidates(command),
+    ...roots.flatMap((root) => names.map((name) => path.join(root, tizenSubdir, name)))
+  ];
+}
+
+function webOsCliCandidates(command) {
+  if (!command.startsWith("ares")) {
+    return [];
+  }
+
+  try {
+    const packageJsonPath = require.resolve("@webos-tools/cli/package.json");
+    const packageRoot = path.dirname(packageJsonPath);
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    const binPath = packageJson.bin?.[command];
+    return binPath ? [path.join(packageRoot, binPath)] : [];
+  } catch {
+    return [];
+  }
 }
 
 function lookupCommand(command) {
@@ -91,7 +120,7 @@ async function resolveCommand(command) {
 
   for (const candidate of executableCandidates(command)) {
     try {
-      await fsp.access(candidate, fs.constants.X_OK);
+      await fsp.access(candidate, candidate.endsWith(".js") ? fs.constants.R_OK : fs.constants.X_OK);
       return candidate;
     } catch {}
   }
@@ -100,10 +129,15 @@ async function resolveCommand(command) {
 }
 
 function runCommand(event, command, args, options = {}) {
-  emit(event, { type: "command", text: `$ ${command} ${args.join(" ")}` });
+  const spawnSpec = resolveSpawnSpec(command, args);
+  emit(event, { type: "command", text: `$ ${spawnSpec.displayCommand} ${formatCommandArgs(spawnSpec.args)}` });
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { shell: false, cwd: options.cwd || undefined });
+    const child = spawn(spawnSpec.command, spawnSpec.args, {
+      shell: false,
+      cwd: options.cwd || undefined,
+      env: spawnSpec.env
+    });
 
     child.stdout.on("data", (chunk) => emit(event, { type: "stdout", text: chunk.toString() }));
     child.stderr.on("data", (chunk) => emit(event, { type: "stderr", text: chunk.toString() }));
@@ -112,17 +146,24 @@ function runCommand(event, command, args, options = {}) {
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`${command} exited with code ${code}`));
+        const error = new Error(`${command} exited with code ${code}`);
+        error.code = code;
+        reject(error);
       }
     });
   });
 }
 
 function captureCommand(event, command, args, options = {}) {
-  emit(event, { type: "command", text: `$ ${command} ${args.join(" ")}` });
+  const spawnSpec = resolveSpawnSpec(command, args);
+  emit(event, { type: "command", text: `$ ${spawnSpec.displayCommand} ${formatCommandArgs(spawnSpec.args)}` });
 
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { shell: false, cwd: options.cwd || undefined });
+    const child = spawn(spawnSpec.command, spawnSpec.args, {
+      shell: false,
+      cwd: options.cwd || undefined,
+      env: spawnSpec.env
+    });
     let stdout = "";
     let stderr = "";
 
@@ -145,6 +186,34 @@ function captureCommand(event, command, args, options = {}) {
       }
     });
   });
+}
+
+function resolveSpawnSpec(command, args) {
+  if (String(command).endsWith(".js")) {
+    return {
+      command: process.execPath,
+      args: [command, ...args],
+      displayCommand: command,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1"
+      }
+    };
+  }
+
+  return {
+    command,
+    args,
+    displayCommand: command,
+    env: process.env
+  };
+}
+
+function formatCommandArgs(args) {
+  const hiddenValueFlags = new Set(["--passphrase"]);
+  return args
+    .map((arg, index) => hiddenValueFlags.has(args[index - 1]) ? "********" : arg)
+    .join(" ");
 }
 
 async function fetchJson(url) {
@@ -215,16 +284,20 @@ function requireValue(value, label) {
 }
 
 async function runLg(event, action, options) {
-  const device = requireValue(options.deviceName || options.ip, "Nome device/IP LG");
+  const ip = String(options.ip || "").trim();
+  const passphrase = String(options.lgPassphrase || "").trim();
+  const device = passphrase
+    ? await configureLgDevice(event, ip, options.deviceName, passphrase)
+    : requireValue(options.deviceName || ip, "Nome device/IP LG");
   const aresInstall = await resolveCommand("ares-install");
   if (!aresInstall) {
-    throw new Error("ares-install non trovato. Installa LG webOS TV SDK CLI e riapri l'app.");
+    throw new Error("ares-install non trovato nel pacchetto dell'app.");
   }
 
   if (action === "launch") {
     const aresLaunch = await resolveCommand("ares-launch");
     if (!aresLaunch) {
-      throw new Error("ares-launch non trovato. Installa LG webOS TV SDK CLI o aggiungilo al PATH.");
+      throw new Error("ares-launch non trovato nel pacchetto dell'app.");
     }
     await runCommand(event, aresLaunch, ["--device", device, config.webos.appId]);
     return;
@@ -237,6 +310,41 @@ async function runLg(event, action, options) {
 
   const packagePath = options.packagePath || await resolveReleaseAsset(event, "webos");
   await runCommand(event, aresInstall, ["--device", device, packagePath]);
+}
+
+function defaultLgDeviceName(ip) {
+  return `nuvio-lg-${String(ip || "").trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "tv"}`;
+}
+
+async function configureLgDevice(event, ip, requestedDeviceName, passphrase) {
+  const host = requireValue(ip, "IP LG TV");
+  const deviceName = String(requestedDeviceName || "").trim() || defaultLgDeviceName(host);
+  const aresSetupDevice = await resolveCommand("ares-setup-device");
+  const aresNovacom = await resolveCommand("ares-novacom");
+
+  if (!aresSetupDevice || !aresNovacom) {
+    throw new Error("Comandi webOS ares-setup-device/ares-novacom non trovati nel pacchetto dell'app.");
+  }
+
+  emit(event, { type: "info", text: `Configuro automaticamente LG webOS device: ${deviceName}` });
+
+  const deviceInfoArgs = [
+    "--info", "username=prisoner",
+    "--info", `host=${host}`,
+    "--info", "port=9922",
+    "--info", "default=true"
+  ];
+
+  try {
+    await runCommand(event, aresSetupDevice, ["--add", deviceName, ...deviceInfoArgs]);
+  } catch (error) {
+    emit(event, { type: "info", text: "Device LG gia' presente o add non riuscito, provo modify." });
+    await runCommand(event, aresSetupDevice, ["--modify", deviceName, ...deviceInfoArgs]);
+  }
+
+  await runCommand(event, aresNovacom, ["--device", deviceName, "--getkey", "--passphrase", passphrase]);
+  emit(event, { type: "success", text: "Connessione LG configurata." });
+  return deviceName;
 }
 
 function parseSdbTarget(output, ip) {
@@ -258,17 +366,440 @@ async function connectSamsungDevice(event, sdb, ip) {
   return target;
 }
 
-function normalizeOptionalPath(value) {
-  return String(value || "").trim().replace(/^"|"$/g, "");
+function connectSamsungAdb(event, ip) {
+  emit(event, { type: "info", text: `Connessione diretta alla TV Samsung ${ip}:26101.` });
+
+  return new Promise((resolve, reject) => {
+    const adbClient = adbhost.createConnection({ host: ip, port: 26101 });
+    let settled = false;
+
+    function finish(error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        try {
+          adbClient._stream?.destroy();
+        } catch {}
+        reject(error);
+        return;
+      }
+      emit(event, { type: "success", text: "Connessione diretta Samsung attiva." });
+      resolve(adbClient);
+    }
+
+    const timeout = setTimeout(() => {
+      finish(new Error("Timeout connessione diretta Samsung."));
+    }, 6000);
+
+    adbClient._stream.on("connect", () => {
+      setTimeout(() => finish(), 800);
+    });
+    adbClient._stream.on("error", (error) => {
+      finish(error);
+    });
+    adbClient._stream.on("close", () => {
+      if (!settled) {
+        finish(new Error("Connessione diretta Samsung chiusa."));
+      }
+    });
+  });
 }
 
-function readPkcs12(filePath, password, label) {
-  const der = forge.asn1.fromDer(forge.util.createBuffer(fs.readFileSync(filePath)));
+async function connectSamsungTransport(event, ip) {
   try {
-    return forge.pkcs12.pkcs12FromAsn1(der, false, password);
+    const adbClient = await connectSamsungAdb(event, ip);
+    return { type: "adb", adbClient, target: ip };
   } catch (error) {
-    throw new Error(`${label}: certificato o password non validi.`);
+    emit(event, { type: "info", text: `Connessione diretta non riuscita (${error.message}). Provo fallback sdb.` });
   }
+
+  const sdb = await resolveCommand("sdb");
+  if (!sdb) {
+    throw new Error("Impossibile collegarsi alla TV. Verifica Developer Mode, Host PC IP e che PC/TV siano sulla stessa rete. Fallback sdb non disponibile.");
+  }
+
+  const target = await connectSamsungDevice(event, sdb, ip);
+  return { type: "sdb", sdb, target };
+}
+
+function closeSamsungTransport(transport) {
+  if (transport?.type !== "adb") {
+    return;
+  }
+
+  try {
+    transport.adbClient?._stream?.end();
+    transport.adbClient?._stream?.destroy();
+  } catch {}
+}
+
+function adbCreateStream(adbClient, command) {
+  return new Promise((resolve, reject) => {
+    const stream = adbClient.createStream(command);
+    let output = "";
+    let settled = false;
+
+    function finish(error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(output);
+    }
+
+    stream.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    stream.on("error", finish);
+    stream.on("end", () => finish());
+    stream.on("close", () => finish());
+  });
+}
+
+async function captureSamsungShell(event, transport, args) {
+  if (transport.type === "adb") {
+    const command = `shell:${args.join(" ")}`;
+    emit(event, { type: "command", text: `$ adbhost ${command}` });
+    const stdout = await adbCreateStream(transport.adbClient, command);
+    if (stdout) {
+      emit(event, { type: "stdout", text: stdout });
+    }
+    return { stdout, stderr: "" };
+  }
+
+  return captureCommand(event, transport.sdb, ["-s", transport.target, "shell", ...args]);
+}
+
+async function runSamsungShell(event, transport, args) {
+  const result = await captureSamsungShell(event, transport, args);
+  return result.stdout;
+}
+
+function pushFileAdb(adbClient, remotePath, data) {
+  return new Promise((resolve, reject) => {
+    const shell = adbClient.createStream("sync:");
+    let interval;
+    let settled = false;
+
+    function finish(error) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      clearInterval(interval);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    }
+
+    const timeout = setTimeout(() => {
+      finish(new Error(`Timeout push ${remotePath}`));
+    }, 30000);
+
+    shell.on("error", (error) => {
+      finish(error);
+    });
+
+    interval = setInterval(() => {
+      if (shell._remoteId === -1) {
+        return;
+      }
+
+      try {
+        const statBuffer = Buffer.alloc(8);
+        statBuffer.write("STAT", 0);
+        statBuffer.writeUInt32LE(remotePath.length, 4);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, statBuffer);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, Buffer.from(remotePath));
+
+        const sendBuffer = Buffer.alloc(8);
+        sendBuffer.writeUInt32LE(0x444E4553, 0);
+        sendBuffer.writeUInt32LE(remotePath.length + 6, 4);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, sendBuffer);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, Buffer.from(`${remotePath},33261`));
+
+        for (let offset = 0; offset < data.length; offset += 1420) {
+          const chunk = data.slice(offset, offset + 1420);
+          const buffer = Buffer.alloc(8 + chunk.length);
+          buffer.write("DATA", 0);
+          buffer.writeUInt32LE(chunk.length, 4);
+          chunk.copy(buffer, 8);
+          adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, buffer);
+        }
+
+        const doneData = Buffer.alloc(8);
+        doneData.write("DONE", 0);
+        doneData.writeUInt32LE(Math.floor(Date.now() / 1000), 4);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, doneData);
+
+        const quitData = Buffer.alloc(8);
+        quitData.write("QUIT", 0);
+        adbClient._writePacket(adbCommands.WRTE, shell._localId, shell._remoteId, quitData);
+
+        finish();
+      } catch (error) {
+        finish(error);
+      }
+    }, 100);
+  });
+}
+
+async function pushSamsungFile(event, transport, localPath, remotePath) {
+  if (transport.type === "adb") {
+    emit(event, { type: "command", text: `$ adbhost push ${localPath} ${remotePath}` });
+    await pushFileAdb(transport.adbClient, remotePath, fs.readFileSync(localPath));
+    return;
+  }
+
+  await runCommand(event, transport.sdb, ["-s", transport.target, "push", localPath, remotePath]);
+}
+
+function throwIfSamsungOutputFailed(output, context) {
+  const failedLine = String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /install failed|uninstall failed|check certificate error|error/i.test(line));
+
+  if (failedLine) {
+    throw new Error(`${context}: ${failedLine}`);
+  }
+}
+
+function getSamsungCertificateConfigPath(target) {
+  const safeTarget = String(target || "default").replace(/[^a-z0-9_.-]+/gi, "_");
+  return path.join(app.getPath("userData"), "samsung-certificates", `${safeTarget}.json`);
+}
+
+async function readSamsungCertificateConfig(target) {
+  try {
+    const configJson = await fsp.readFile(getSamsungCertificateConfigPath(target), "utf8");
+    return JSON.parse(configJson);
+  } catch {
+    return null;
+  }
+}
+
+async function writeSamsungCertificateConfig(target, certificateConfig) {
+  const configPath = getSamsungCertificateConfigPath(target);
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, JSON.stringify(certificateConfig, null, 2));
+}
+
+function samsungAccessInfoHtml(status = "waiting") {
+  const isDone = status === "done";
+  return `<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nuvio Samsung Login</title>
+  <style>
+    body { margin: 0; min-height: 100vh; font-family: Arial, sans-serif; color: #f4f7fb; background: #111418; display: grid; place-items: center; }
+    main { width: min(720px, calc(100vw - 32px)); border: 1px solid #2c3440; border-radius: 8px; padding: 24px; background: #161b22; }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    p { color: #aab6c5; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${isDone ? "Autorizzazione Samsung completata" : "Autorizzazione Samsung in corso"}</h1>
+    <p>${isDone ? "Puoi chiudere questa finestra e tornare all'installer Nuvio. La procedura proseguira' automaticamente." : "Completa il login Samsung nella finestra aperta. L'installer Nuvio ricevera' l'autorizzazione automaticamente."}</p>
+  </main>
+</body>
+</html>`;
+}
+
+function parseSamsungAccessInfo(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  if (typeof rawValue === "object") {
+    return rawValue;
+  }
+
+  const value = String(rawValue).trim();
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {}
+
+  const parsed = querystring.parse(value);
+  return Object.keys(parsed).length > 0 ? parsed : null;
+}
+
+function extractSamsungAccessInfoFromRequest(request, body = "") {
+  const url = new URL(request.url, "http://127.0.0.1:4794");
+  const queryInfo = parseSamsungAccessInfo(url.searchParams.get("code") || url.searchParams.get("accessInfo"));
+  if (queryInfo) {
+    return queryInfo;
+  }
+
+  const queryObject = Object.fromEntries(url.searchParams.entries());
+  if (queryObject.access_token || queryObject.accessToken) {
+    return queryObject;
+  }
+
+  const formBody = querystring.parse(body);
+  return parseSamsungAccessInfo(formBody.code || formBody.accessInfo) || formBody;
+}
+
+function hasSamsungAccessInfo(accessInfo) {
+  return Boolean(accessInfo && (accessInfo.access_token || accessInfo.accessToken));
+}
+
+function waitForSamsungAccessInfo(event) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let server;
+
+    function finish(accessInfo, response) {
+      if (settled) {
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(samsungAccessInfoHtml("done"));
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(samsungAccessInfoHtml("done"));
+      server.close();
+      resolve(accessInfo);
+    }
+
+    const timeout = setTimeout(() => {
+      if (server) {
+        server.close();
+      }
+      reject(new Error("Login Samsung scaduto. Riprova l'installazione e completa il login entro 5 minuti."));
+    }, 5 * 60 * 1000);
+
+    server = http.createServer((request, response) => {
+      if (request.method === "POST") {
+        let body = "";
+        request.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          try {
+            const accessInfo = extractSamsungAccessInfoFromRequest(request, body);
+            if (!hasSamsungAccessInfo(accessInfo)) {
+              response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+              response.end(samsungAccessInfoHtml());
+              return;
+            }
+            finish(accessInfo, response);
+          } catch (error) {
+            response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+            response.end(samsungAccessInfoHtml());
+          }
+        });
+        return;
+      }
+
+      const accessInfo = extractSamsungAccessInfoFromRequest(request);
+      if (hasSamsungAccessInfo(accessInfo)) {
+        finish(accessInfo, response);
+        return;
+      }
+
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(samsungAccessInfoHtml());
+    });
+
+    server.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(new Error(`Impossibile aprire il server locale Samsung su porta 4794: ${error.message}`));
+    });
+
+    server.listen(4794, "127.0.0.1", () => {
+      const authUrl = "https://account.samsung.com/mobile/account/check.do?serviceID=v285zxnl3h&actionID=StartOAuth2&accessToken=Y&redirect_uri=http://localhost:4794/signin/callback";
+      emit(event, { type: "info", text: "Apro il login Samsung. Completa l'accesso nel browser, poi torna all'installer." });
+      shell.openExternal(authUrl);
+    });
+  });
+}
+
+async function getSamsungDuid(event, transport) {
+  const result = await captureSamsungShell(event, transport, ["0", "getduid"]);
+  const duid = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  if (!duid) {
+    throw new Error("Impossibile leggere la DUID della TV Samsung.");
+  }
+  emit(event, { type: "info", text: `DUID Samsung rilevata: ${duid}` });
+  return duid;
+}
+
+async function createSamsungCertificateForTarget(event, transport) {
+  const duid = await getSamsungDuid(event, transport);
+  const accessInfo = await waitForSamsungAccessInfo(event);
+  const accessToken = accessInfo.access_token || accessInfo.accessToken;
+  const userId = accessInfo.userId || accessInfo.user_id;
+  if (!accessToken || !userId) {
+    throw new Error("Samsung non ha restituito dati di autorizzazione validi. Riprova il login.");
+  }
+  const password = crypto.randomBytes(18).toString("base64url");
+  const authorInfo = {
+    name: "Nuvio",
+    email: accessInfo.inputEmailID || accessInfo.email || userId,
+    password,
+    privilegeLevel: "Partner"
+  };
+
+  emit(event, { type: "info", text: "Creo il certificato Samsung per questa TV. Puo' richiedere 30-60 secondi." });
+  const creator = new SamsungCertificateCreator();
+  const certificate = await creator.createCertificate(authorInfo, {
+    accessToken,
+    userId
+  }, [duid]);
+
+  if (!certificate.authorCert || !certificate.distributorCert) {
+    throw new Error("Samsung non ha restituito un certificato valido.");
+  }
+
+  const certificateConfig = {
+    authorCert: Buffer.from(certificate.authorCert, "binary").toString("base64"),
+    distributorCert: Buffer.from(certificate.distributorCert, "binary").toString("base64"),
+    distributorXML: certificate.distributorXML ? Buffer.from(certificate.distributorXML, "utf8").toString("base64") : "",
+    password,
+    duid,
+    createdAt: new Date().toISOString()
+  };
+
+  await writeSamsungCertificateConfig(transport.target, certificateConfig);
+
+  if (certificate.distributorXML) {
+    const profilePath = path.join(app.getPath("userData"), "samsung-certificates", `${String(transport.target).replace(/[^a-z0-9_.-]+/gi, "_")}-device-profile.xml`);
+    await fsp.writeFile(profilePath, certificate.distributorXML, "utf8");
+    await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
+    await pushSamsungFile(event, transport, profilePath, "/home/owner/share/tmp/sdk_tools/device-profile.xml");
+  }
+
+  emit(event, { type: "success", text: "Certificato Samsung creato e salvato per questa TV." });
+  return certificateConfig;
+}
+
+async function getOrCreateSamsungCertificate(event, transport) {
+  const existing = await readSamsungCertificateConfig(transport.target);
+  if (existing?.authorCert && existing?.distributorCert && existing?.password) {
+    emit(event, { type: "info", text: "Uso certificato Samsung gia' salvato per questa TV." });
+    return existing;
+  }
+  return createSamsungCertificateForTarget(event, transport);
 }
 
 async function parseTizenPackageMetadata(packagePath) {
@@ -338,18 +869,18 @@ function tizenIdentifierCandidates(...values) {
     .filter(Boolean)));
 }
 
-async function listSamsungApps(event, sdb, target) {
-  const result = await captureCommand(event, sdb, ["-s", target, "shell", "0", "vd_applist"]);
+async function listSamsungApps(event, transport) {
+  const result = await captureSamsungShell(event, transport, ["0", "vd_applist"]);
   return parseVdAppList(result.stdout);
 }
 
-async function findSamsungInstalledApp(event, sdb, target, identifiers) {
+async function findSamsungInstalledApp(event, transport, identifiers) {
   const candidates = tizenIdentifierCandidates(identifiers);
   if (candidates.length === 0) {
     return null;
   }
 
-  const apps = await listSamsungApps(event, sdb, target);
+  const apps = await listSamsungApps(event, transport);
   return apps.find((app) => [
     app.app_id,
     app.app_tizen_id,
@@ -358,21 +889,8 @@ async function findSamsungInstalledApp(event, sdb, target, identifiers) {
   ].some((value) => candidates.includes(String(value || "").trim()))) || null;
 }
 
-async function maybeResignTizenPackage(event, packagePath, options) {
-  const authorCertPath = normalizeOptionalPath(options.authorCertPath);
-  const authorCertPassword = String(options.authorCertPassword || "");
-  const distributorCertPath = normalizeOptionalPath(options.distributorCertPath);
-  const distributorCertPassword = String(options.distributorCertPassword || "");
-
-  if (!authorCertPath && !distributorCertPath) {
-    return packagePath;
-  }
-
-  if (!authorCertPath || !authorCertPassword || !distributorCertPath || !distributorCertPassword) {
-    throw new Error("Per firmare senza Tizen Studio servono author .p12, author password, distributor .p12 e distributor password.");
-  }
-
-  emit(event, { type: "info", text: "Resign WGT con tizen.js, senza comando tizen/Tizen Studio." });
+async function resignTizenPackageWithSamsungCertificate(event, packagePath, certificateConfig) {
+  emit(event, { type: "info", text: "Firmo automaticamente il WGT con certificato Samsung salvato." });
 
   const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
   const unsignedFiles = await Promise.all(Object.keys(zip.files).map(async (filename) => {
@@ -386,8 +904,11 @@ async function maybeResignTizenPackage(event, packagePath, options) {
     };
   }));
 
-  const authorKey = readPkcs12(authorCertPath, authorCertPassword, "Author cert");
-  const distributorKey = readPkcs12(distributorCertPath, distributorCertPassword, "Distributor cert");
+  const authorDer = forge.util.createBuffer(Buffer.from(certificateConfig.authorCert, "base64").toString("binary"));
+  const distributorDer = forge.util.createBuffer(Buffer.from(certificateConfig.distributorCert, "base64").toString("binary"));
+  const authorKey = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(authorDer), false, certificateConfig.password);
+  const distributorKey = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(distributorDer), false, certificateConfig.password);
+
   const authorSignature = new Signature("AuthorSignature", unsignedFiles.filter(Boolean));
   const authorFiles = await authorSignature.sign(authorKey);
   const distributorSignature = new Signature("DistributorSignature", authorFiles);
@@ -401,15 +922,20 @@ async function maybeResignTizenPackage(event, packagePath, options) {
   const outputDir = path.join(app.getPath("userData"), "resigned");
   await fsp.mkdir(outputDir, { recursive: true });
   const parsed = path.parse(packagePath);
-  const resignedPackage = path.join(outputDir, `${parsed.name}-signed-${Date.now()}${parsed.ext || ".wgt"}`);
+  const resignedPackage = path.join(outputDir, `${parsed.name}-samsung-signed-${Date.now()}${parsed.ext || ".wgt"}`);
   const zipData = await outputZip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   await fsp.writeFile(resignedPackage, zipData);
 
-  emit(event, { type: "info", text: `WGT firmato creato: ${resignedPackage}` });
+  emit(event, { type: "info", text: `WGT firmato automaticamente: ${resignedPackage}` });
   return resignedPackage;
 }
 
-async function installSamsungPackage(event, sdb, target, packagePath) {
+async function prepareSamsungPackage(event, transport, packagePath) {
+  const certificateConfig = await getOrCreateSamsungCertificate(event, transport);
+  return resignTizenPackageWithSamsungCertificate(event, packagePath, certificateConfig);
+}
+
+async function installSamsungPackage(event, transport, packagePath) {
   const metadata = await parseTizenPackageMetadata(packagePath);
   const installIds = tizenIdentifierCandidates(metadata.appId, metadata.packageId);
   if (installIds.length === 0) {
@@ -422,13 +948,14 @@ async function installSamsungPackage(event, sdb, target, packagePath) {
     emit(event, { type: "info", text: `Application id rilevato: ${metadata.appId}` });
   }
 
-  await runCommand(event, sdb, ["-s", target, "shell", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
-  await runCommand(event, sdb, ["-s", target, "push", packagePath, remotePath]);
+  await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
+  await pushSamsungFile(event, transport, packagePath, remotePath);
 
   let lastError = null;
   for (const installId of installIds) {
     try {
-      await runCommand(event, sdb, ["-s", target, "shell", "0", "vd_appinstall", installId, remotePath]);
+      const output = await runSamsungShell(event, transport, ["0", "vd_appinstall", installId, remotePath]);
+      throwIfSamsungOutputFailed(output, "vd_appinstall non riuscito");
       return metadata;
     } catch (error) {
       lastError = error;
@@ -439,9 +966,9 @@ async function installSamsungPackage(event, sdb, target, packagePath) {
   throw lastError || new Error("vd_appinstall non riuscito.");
 }
 
-async function uninstallSamsungApp(event, sdb, target, identifiers) {
+async function uninstallSamsungApp(event, transport, identifiers) {
   const candidates = tizenIdentifierCandidates(identifiers);
-  const installedApp = await findSamsungInstalledApp(event, sdb, target, candidates).catch(() => null);
+  const installedApp = await findSamsungInstalledApp(event, transport, candidates).catch(() => null);
   const uninstallIds = tizenIdentifierCandidates(
     installedApp?.app_id,
     installedApp?.app_tizen_id,
@@ -451,7 +978,8 @@ async function uninstallSamsungApp(event, sdb, target, identifiers) {
   let lastError = null;
   for (const uninstallId of uninstallIds) {
     try {
-      await runCommand(event, sdb, ["-s", target, "shell", "0", "vd_appuninstall", uninstallId]);
+      const output = await runSamsungShell(event, transport, ["0", "vd_appuninstall", uninstallId]);
+      throwIfSamsungOutputFailed(output, "vd_appuninstall non riuscito");
       return;
     } catch (error) {
       lastError = error;
@@ -459,68 +987,74 @@ async function uninstallSamsungApp(event, sdb, target, identifiers) {
   }
 
   try {
-    await runCommand(event, sdb, ["-s", target, "uninstall", candidates[0] || config.tizen.appId]);
+    if (transport.type !== "sdb") {
+      throw lastError || new Error("Fallback sdb uninstall non disponibile con connessione diretta.");
+    }
+    await runCommand(event, transport.sdb, ["-s", transport.target, "uninstall", candidates[0] || config.tizen.appId]);
   } catch (fallbackError) {
     const tizen = await resolveCommand("tizen");
     if (!tizen) {
       throw lastError || fallbackError;
     }
     emit(event, { type: "info", text: "vd_appuninstall/sdb uninstall non riusciti, provo fallback con tizen CLI trovato sul sistema." });
-    await runCommand(event, tizen, ["uninstall", "-p", candidates[0] || config.tizen.appId, "-t", target]);
+    await runCommand(event, tizen, ["uninstall", "-p", candidates[0] || config.tizen.appId, "-t", transport.target]);
   }
 }
 
-async function launchSamsungApp(event, sdb, target, identifiers) {
-  const installedApp = await findSamsungInstalledApp(event, sdb, target, identifiers);
+async function launchSamsungApp(event, transport, identifiers) {
+  const installedApp = await findSamsungInstalledApp(event, transport, identifiers);
   const launchId = installedApp?.app_id || installedApp?.app_tizen_id || tizenIdentifierCandidates(identifiers)[0];
   if (!launchId) {
     throw new Error("App Samsung non trovata. Installa Nuvio o controlla appId in installer.config.json.");
   }
-  await runCommand(event, sdb, ["-s", target, "shell", "0", "was_execute", launchId]);
+  const output = await runSamsungShell(event, transport, ["0", "was_execute", launchId]);
+  throwIfSamsungOutputFailed(output, "Avvio app Samsung non riuscito");
 }
 
 async function runSamsung(event, action, options) {
   const ip = requireValue(options.ip, "IP Samsung TV");
-  const sdb = await resolveCommand("sdb");
-  if (!sdb) {
-    throw new Error("sdb non trovato. Serve il binario sdb nel PATH o in una cartella Tizen Studio standard. Il comando tizen non e' piu' richiesto.");
-  }
-
-  const target = await connectSamsungDevice(event, sdb, ip);
+  const transport = await connectSamsungTransport(event, ip);
   const configuredIds = tizenIdentifierCandidates(config.tizen.appId, config.tizen.packageId, config.tizen.appIds);
 
-  if (action === "launch") {
-    await launchSamsungApp(event, sdb, target, configuredIds);
-    return;
-  }
-
-  if (action === "uninstall") {
-    await uninstallSamsungApp(event, sdb, target, configuredIds);
-    return;
-  }
-
-  const packagePath = options.packagePath || await resolveReleaseAsset(event, "tizen");
-  const installPackagePath = await maybeResignTizenPackage(event, packagePath, options);
   try {
-    await installSamsungPackage(event, sdb, target, installPackagePath);
-  } catch (error) {
-    try {
-      emit(event, { type: "info", text: "vd_appinstall non riuscito, provo fallback con sdb install." });
-      await runCommand(event, sdb, ["-s", target, "install", installPackagePath]);
-    } catch (fallbackError) {
-      const tizen = await resolveCommand("tizen");
-      if (!tizen) {
-        throw error;
-      }
-      emit(event, { type: "info", text: "sdb install non riuscito, provo fallback con tizen CLI trovato sul sistema." });
-      await runCommand(event, tizen, ["install", "-n", installPackagePath, "-t", target]);
+    if (action === "launch") {
+      await launchSamsungApp(event, transport, configuredIds);
+      return;
     }
-  }
 
-  emit(event, {
-    type: "info",
-    text: "Come TizenBrew: se vuoi usare debug/autolaunch, imposta Host PC IP a 127.0.0.1 sulla TV dopo l'installazione."
-  });
+    if (action === "uninstall") {
+      await uninstallSamsungApp(event, transport, configuredIds);
+      return;
+    }
+
+    const packagePath = options.packagePath || await resolveReleaseAsset(event, "tizen");
+    const installPackagePath = await prepareSamsungPackage(event, transport, packagePath);
+    try {
+      await installSamsungPackage(event, transport, installPackagePath);
+    } catch (error) {
+      try {
+        if (transport.type !== "sdb") {
+          throw error;
+        }
+        emit(event, { type: "info", text: "vd_appinstall non riuscito, provo fallback con sdb install." });
+        await runCommand(event, transport.sdb, ["-s", transport.target, "install", installPackagePath]);
+      } catch (fallbackError) {
+        const tizen = await resolveCommand("tizen");
+        if (!tizen) {
+          throw error;
+        }
+        emit(event, { type: "info", text: "sdb install non riuscito, provo fallback con tizen CLI trovato sul sistema." });
+        await runCommand(event, tizen, ["install", "-n", installPackagePath, "-t", transport.target]);
+      }
+    }
+
+    emit(event, {
+      type: "info",
+      text: "Come TizenBrew: se vuoi usare debug/autolaunch, imposta Host PC IP a 127.0.0.1 sulla TV dopo l'installazione."
+    });
+  } finally {
+    closeSamsungTransport(transport);
+  }
 }
 
 ipcMain.handle("installer:run", async (event, request) => {
