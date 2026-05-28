@@ -18,9 +18,15 @@ const { Signature, SamsungCertificateCreator } = require("tizen");
 const configPath = path.join(__dirname, "..", "installer.config.json");
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
+const appDisplayName = "Nuvio WebTV Installer";
 const isWindows = process.platform === "win32";
 const appIconPath = path.join(__dirname, "..", "build", "icon.png");
 const adbCommands = AdbPacket.commands;
+
+app.setName(appDisplayName);
+if (isWindows) {
+  app.setAppUserModelId("space.nuvio.webtvinstaller");
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -28,7 +34,7 @@ function createWindow() {
     height: 800,
     minWidth: 1000,
     minHeight: 640,
-    title: "Nuvio TV Installer",
+    title: appDisplayName,
     icon: appIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

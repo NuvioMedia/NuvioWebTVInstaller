@@ -1,4 +1,4 @@
-# Nuvio TV Installer
+# Nuvio WebTV Installer
 
 Desktop app to install, update, launch, and uninstall Nuvio on:
 
@@ -33,8 +33,8 @@ npm run dist:mac
 
 With the current configuration, standalone runnable apps are generated without an installer:
 
-- `dist/Nuvio-TV-Installer-<version>-Windows.exe` for Windows
-- `dist/mac-arm64/Nuvio TV Installer.app` for macOS Apple Silicon
+- `dist/Nuvio-WebTV-Installer-<version>-Windows.exe` for Windows
+- `dist/mac-arm64/Nuvio WebTV Installer.app` for macOS Apple Silicon
 
 ## App Packages
 

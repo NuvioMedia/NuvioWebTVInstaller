@@ -24,8 +24,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "space.nuvio.tvinstaller",
-    "productName": "Nuvio TV Installer",
+    "appId": "space.nuvio.webtvinstaller",
+    "productName": "Nuvio WebTV Installer",
     "icon": "icon.png",
     "asar": true,
     "npmRebuild": false,
@@ -34,6 +34,7 @@
     },
     "files": [
       "src/**/*",
+      "logo/**/*",
       "build/icon.png",
       "installer.config.json",
       "package.json"
@@ -50,7 +51,7 @@
       ]
     },
     "portable": {
-      "artifactName": "Nuvio-TV-Installer-${version}-Windows.${ext}"
+      "artifactName": "Nuvio-WebTV-Installer-${version}-Windows.${ext}"
     },
     "mac": {
       "icon": "icon.icns",
