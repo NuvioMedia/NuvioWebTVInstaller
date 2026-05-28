@@ -7,8 +7,9 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win nsis --x64",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.8.10",
@@ -29,14 +30,19 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis",
-      "artifactName": "Nuvio-TV-Installer-${version}-Setup.${ext}",
-      "signAndEditExecutable": false
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ]
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+    "mac": {
+      "target": [
+        {
+          "target": "dir"
+        }
+      ]
     }
   }
 }
