@@ -165,7 +165,12 @@
         <div class="log-panel">
           <div class="log-header">
             <h3>Installation Log</h3>
-            <button type="button" id="btn-clear-log">Clear</button>
+            <div class="log-actions">
+              <button type="button" id="btn-copy-log" aria-label="Copy installation log" title="Copy log">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </button>
+              <button type="button" id="btn-clear-log">Clear</button>
+            </div>
           </div>
           <div class="log-content" id="log-output">
             <div class="log-line log-info">Welcome to Nuvio Web TV Installer.</div>

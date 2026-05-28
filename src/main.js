@@ -58,6 +58,13 @@ function emit(event, payload) {
   event.sender.send("installer:log", payload);
 }
 
+function getLocalIPv4Addresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter((entry) => entry && entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address);
+}
+
 function executableCandidates(command) {
   const names = isWindows ? [`${command}.exe`, `${command}.bat`, `${command}.cmd`, command] : [command];
   const home = os.homedir();
@@ -166,6 +173,25 @@ function captureCommand(event, command, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    function finish(error, result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(result);
+    }
+
+    const timeout = options.timeoutMs ? setTimeout(() => {
+      child.kill();
+      finish(new Error(`${command} timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs) : null;
 
     child.stdout.on("data", (chunk) => {
       const text = chunk.toString();
@@ -177,12 +203,12 @@ function captureCommand(event, command, args, options = {}) {
       stderr += text;
       emit(event, { type: "stderr", text });
     });
-    child.on("error", reject);
+    child.on("error", finish);
     child.on("exit", (code) => {
       if (code === 0) {
-        resolve({ stdout, stderr });
+        finish(null, { stdout, stderr });
       } else {
-        reject(new Error(`${command} exited with code ${code}`));
+        finish(new Error(`${command} exited with code ${code}`));
       }
     });
   });
@@ -409,10 +435,15 @@ function connectSamsungAdb(event, ip) {
 }
 
 async function connectSamsungTransport(event, ip) {
+  let adbClient = null;
   try {
-    const adbClient = await connectSamsungAdb(event, ip);
+    adbClient = await connectSamsungAdb(event, ip);
+    await captureSamsungShell(event, { type: "adb", adbClient, target: ip }, ["0", "getduid"], { timeoutMs: 8000, logOutput: false });
     return { type: "adb", adbClient, target: ip };
   } catch (error) {
+    try {
+      adbClient?._stream?.destroy();
+    } catch {}
     emit(event, { type: "info", text: `Direct connection failed (${error.message}). Trying sdb fallback.` });
   }
 
@@ -436,7 +467,7 @@ function closeSamsungTransport(transport) {
   } catch {}
 }
 
-function adbCreateStream(adbClient, command) {
+function adbCreateStream(adbClient, command, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
     const stream = adbClient.createStream(command);
     let output = "";
@@ -447,12 +478,20 @@ function adbCreateStream(adbClient, command) {
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       if (error) {
         reject(error);
         return;
       }
       resolve(output);
     }
+
+    const timeout = setTimeout(() => {
+      try {
+        stream.destroy();
+      } catch {}
+      finish(new Error(`Timed out waiting for Samsung shell command: ${command}`));
+    }, timeoutMs);
 
     stream.on("data", (chunk) => {
       output += chunk.toString();
@@ -463,22 +502,22 @@ function adbCreateStream(adbClient, command) {
   });
 }
 
-async function captureSamsungShell(event, transport, args) {
+async function captureSamsungShell(event, transport, args, options = {}) {
   if (transport.type === "adb") {
     const command = `shell:${args.join(" ")}`;
     emit(event, { type: "command", text: `$ adbhost ${command}` });
-    const stdout = await adbCreateStream(transport.adbClient, command);
-    if (stdout) {
+    const stdout = await adbCreateStream(transport.adbClient, command, options.timeoutMs);
+    if (stdout && options.logOutput !== false) {
       emit(event, { type: "stdout", text: stdout });
     }
     return { stdout, stderr: "" };
   }
 
-  return captureCommand(event, transport.sdb, ["-s", transport.target, "shell", ...args]);
+  return captureCommand(event, transport.sdb, ["-s", transport.target, "shell", ...args], options);
 }
 
-async function runSamsungShell(event, transport, args) {
-  const result = await captureSamsungShell(event, transport, args);
+async function runSamsungShell(event, transport, args, options = {}) {
+  const result = await captureSamsungShell(event, transport, args, options);
   return result.stdout;
 }
 
@@ -603,17 +642,34 @@ function samsungAccessInfoHtml(status = "waiting") {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nuvio Samsung Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; min-height: 100vh; font-family: Arial, sans-serif; color: #f4f7fb; background: #111418; display: grid; place-items: center; }
-    main { width: min(720px, calc(100vw - 32px)); border: 1px solid #2c3440; border-radius: 8px; padding: 24px; background: #161b22; }
-    h1 { margin: 0 0 12px; font-size: 24px; }
-    p { color: #aab6c5; line-height: 1.5; }
+    :root { color-scheme: dark; --bg: #0d0d0d; --panel: rgba(24,24,24,0.72); --border: rgba(255,255,255,0.1); --text: #fff; --muted: #a8a8a8; --success: #34d399; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--text); background: radial-gradient(circle at 18% 12%, rgba(255,255,255,0.08), transparent 32%), radial-gradient(circle at 82% 78%, rgba(52,211,153,0.08), transparent 30%), var(--bg); display: grid; place-items: center; overflow: hidden; }
+    body::before { content: ""; position: fixed; inset: 0; background-image: linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px); background-size: 52px 52px; mask-image: radial-gradient(circle at center, #000 0 48%, transparent 76%); pointer-events: none; }
+    main { position: relative; width: min(680px, calc(100vw - 40px)); padding: 42px; border: 1px solid var(--border); border-radius: 28px; background: linear-gradient(180deg, rgba(255,255,255,0.08), transparent 34%), var(--panel); box-shadow: 0 28px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.12); backdrop-filter: blur(28px); }
+    .brand { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 13px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 34px; }
+    .mark { width: 12px; height: 12px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 8px rgba(52,211,153,0.12), 0 0 34px rgba(52,211,153,0.46); }
+    .status { display: inline-flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid rgba(52,211,153,0.28); border-radius: 999px; color: var(--success); background: rgba(52,211,153,0.08); font-size: 13px; font-weight: 700; margin-bottom: 18px; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+    h1 { margin: 0; max-width: 560px; font-size: clamp(34px, 7vw, 58px); line-height: 0.95; letter-spacing: -0.055em; font-weight: 500; }
+    p { margin: 20px 0 0; max-width: 520px; color: var(--muted); font-size: 17px; line-height: 1.6; }
+    .rail { margin-top: 34px; height: 1px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.38), transparent); }
+    .hint { margin-top: 22px; color: #d7d7d7; font-size: 14px; }
+    @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.8); opacity: 0.35; } }
   </style>
 </head>
 <body>
   <main>
+    <div class="brand"><span class="mark"></span>Nuvio Installer</div>
+    <div class="status"><span class="pulse"></span>${isDone ? "Authorized" : "Waiting for Samsung"}</div>
     <h1>${isDone ? "Samsung authorization complete" : "Samsung authorization in progress"}</h1>
     <p>${isDone ? "You can close this window and return to the Nuvio installer. The process will continue automatically." : "Complete the Samsung login in the opened window. The Nuvio installer will receive authorization automatically."}</p>
+    <div class="rail"></div>
+    <div class="hint">${isDone ? "Certificate generation is continuing in the desktop app." : "Keep this page open until authorization finishes."}</div>
   </main>
 </body>
 </html>`;
@@ -735,7 +791,7 @@ function waitForSamsungAccessInfo(event) {
 }
 
 async function getSamsungDuid(event, transport) {
-  const result = await captureSamsungShell(event, transport, ["0", "getduid"]);
+  const result = await captureSamsungShell(event, transport, ["0", "getduid"], { timeoutMs: 10000 });
   const duid = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
   if (!duid) {
     throw new Error("Unable to read the Samsung TV DUID.");
@@ -785,7 +841,7 @@ async function createSamsungCertificateForTarget(event, transport) {
   if (certificate.distributorXML) {
     const profilePath = path.join(app.getPath("userData"), "samsung-certificates", `${String(transport.target).replace(/[^a-z0-9_.-]+/gi, "_")}-device-profile.xml`);
     await fsp.writeFile(profilePath, certificate.distributorXML, "utf8");
-    await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
+    await runSamsungShell(event, transport, ["mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
     await pushSamsungFile(event, transport, profilePath, "/home/owner/share/tmp/sdk_tools/device-profile.xml");
   }
 
@@ -948,7 +1004,7 @@ async function installSamsungPackage(event, transport, packagePath) {
     emit(event, { type: "info", text: `Detected application id: ${metadata.appId}` });
   }
 
-  await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
+  await runSamsungShell(event, transport, ["mkdir", "-p", "/home/owner/share/tmp/sdk_tools"]);
   await pushSamsungFile(event, transport, packagePath, remotePath);
 
   let lastError = null;
@@ -1096,5 +1152,6 @@ ipcMain.handle("installer:getConfig", async () => ({
   repo: config.githubRepo,
   webosAppId: config.webos.appId,
   tizenAppId: config.tizen.appId,
-  platform: os.platform()
+  platform: os.platform(),
+  localIps: getLocalIPv4Addresses()
 }));

@@ -30,6 +30,9 @@ const osNoticeText = document.getElementById('os-notice-text');
 const btnBrowse = document.getElementById('btn-browse');
 const btnBrowseAuthor = document.getElementById('btn-browse-author');
 const btnBrowseDistributor = document.getElementById('btn-browse-distributor');
+const btnInstall = document.getElementById('btn-install');
+const btnCopyLog = document.getElementById('btn-copy-log');
+const btnClearLog = document.getElementById('btn-clear-log');
 const packagePathInput = document.getElementById('packagePath');
 const authorCertPathInput = document.getElementById('authorCertPath');
 const distributorCertPathInput = document.getElementById('distributorCertPath');
@@ -37,6 +40,7 @@ const certPasswordInput = document.getElementById('certPassword');
 const logOutput = document.getElementById('log-output');
 let localIps = [];
 let showHostPcIp = false;
+let installInProgress = false;
 
 async function loadLocalIps() {
   const config = await window.installer?.getConfig?.();
@@ -184,6 +188,16 @@ function appendLog(text, type = 'info') {
   logOutput.scrollTop = logOutput.scrollHeight;
 }
 
+function setInstallInProgress(inProgress) {
+  installInProgress = inProgress;
+  btnInstall.disabled = inProgress;
+  btnInstall.classList.toggle('is-loading', inProgress);
+  btnInstall.setAttribute('aria-busy', String(inProgress));
+  btnInstall.innerHTML = inProgress
+    ? '<span class="button-spinner" aria-hidden="true"></span><span>Installing...</span>'
+    : 'Install';
+}
+
 window.installer?.onLog((payload) => {
   let type = 'info';
   if (payload.type === 'error' || payload.type === 'stderr') type = 'error';
@@ -192,7 +206,25 @@ window.installer?.onLog((payload) => {
   appendLog(payload.text, type);
 });
 
-document.getElementById('btn-clear-log').addEventListener('click', () => {
+btnCopyLog.addEventListener('click', async () => {
+  const logText = Array.from(logOutput.querySelectorAll('.log-line'))
+    .map((line) => line.innerText)
+    .join('\n');
+  if (!logText.trim()) return;
+
+  window.installer?.copyText?.(logText);
+  const originalLabel = btnCopyLog.getAttribute('aria-label');
+  btnCopyLog.classList.add('copied');
+  btnCopyLog.setAttribute('aria-label', 'Log copied');
+  btnCopyLog.setAttribute('title', 'Copied');
+  setTimeout(() => {
+    btnCopyLog.classList.remove('copied');
+    btnCopyLog.setAttribute('aria-label', originalLabel || 'Copy installation log');
+    btnCopyLog.setAttribute('title', 'Copy log');
+  }, 1400);
+});
+
+btnClearLog.addEventListener('click', () => {
   logOutput.innerHTML = '<div class="log-line log-info">Log cleared.</div>';
 });
 
@@ -208,6 +240,10 @@ btnBrowse?.addEventListener('click', async () => {
 });
 
 async function runAction(action) {
+  if (action === 'install' && installInProgress) {
+    return;
+  }
+
   const ip = document.getElementById('ip').value;
   const deviceName = document.getElementById('deviceName').value;
   const lgPassphrase = document.getElementById('lgPassphrase').value;
@@ -246,15 +282,20 @@ async function runAction(action) {
 
   if (window.installer?.run) {
     appendLog(`Starting ${action} on ${targetOs}...`, 'info');
-    const res = await window.installer.run(targetOs, action, options);
-    if (!res.ok) {
-      appendLog(`Failed: ${res.error}`, 'error');
+    if (action === 'install') setInstallInProgress(true);
+    try {
+      const res = await window.installer.run(targetOs, action, options);
+      if (!res.ok) {
+        appendLog(`Failed: ${res.error}`, 'error');
+      }
+    } finally {
+      if (action === 'install') setInstallInProgress(false);
     }
   } else {
     appendLog(`[MOCK] Running ${action} on ${targetOs} with IP ${ip}`, 'command');
   }
 }
 
-document.getElementById('btn-install').addEventListener('click', () => runAction('install'));
+btnInstall.addEventListener('click', () => runAction('install'));
 document.getElementById('btn-launch').addEventListener('click', () => runAction('launch'));
 document.getElementById('btn-uninstall').addEventListener('click', () => runAction('uninstall'));
