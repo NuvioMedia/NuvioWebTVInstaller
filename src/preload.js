@@ -1,9 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("nuvioInstaller", {
+contextBridge.exposeInMainWorld("installer", {
+  run: (platform, action, options) => ipcRenderer.invoke("installer:run", { platform, action, options }),
   getConfig: () => ipcRenderer.invoke("installer:getConfig"),
-  run: (request) => ipcRenderer.invoke("installer:run", request),
-  onLog: (callback) => {
-    ipcRenderer.on("installer:log", (_event, payload) => callback(payload));
-  }
+  onLog: (callback) => ipcRenderer.on("installer:log", (event, payload) => callback(payload)),
+  selectFile: () => ipcRenderer.invoke("installer:selectFile")
 });

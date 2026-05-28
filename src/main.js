@@ -24,9 +24,9 @@ const adbCommands = AdbPacket.commands;
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1040,
-    height: 720,
-    minWidth: 920,
+    width: 1200,
+    height: 800,
+    minWidth: 1000,
     minHeight: 640,
     title: "Nuvio TV Installer",
     icon: appIconPath,
@@ -1077,6 +1077,19 @@ ipcMain.handle("installer:run", async (event, request) => {
     emit(event, { type: "error", text: error.message || String(error) });
     return { ok: false, error: error.message || String(error) };
   }
+});
+
+const { dialog } = require('electron');
+ipcMain.handle("installer:selectFile", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'TV Packages', extensions: ['wgt', 'ipk'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  if (canceled) return null;
+  return filePaths[0];
 });
 
 ipcMain.handle("installer:getConfig", async () => ({
