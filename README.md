@@ -47,6 +47,7 @@ npm run package:tizen
 ```
 
 The generated WGT uses the repo's local `nuvio.env.js`.
+For Samsung P2P playback, the WGT must also include the local Tizen Web Service: `http://tizen.org/feature/web.service`, `services/tizen/enginefs-service.js`, and `services/tizen/runtime/media-http.cjs`. The installer checks these before signing and installing the package.
 
 The installer automatically downloads the correct asset from the latest GitHub release:
 

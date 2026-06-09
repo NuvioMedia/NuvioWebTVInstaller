@@ -1,3 +1,4 @@
+
 const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const crypto = require("node:crypto");
@@ -537,7 +538,7 @@ async function connectSamsungTransport(event, ip) {
 async function connectSamsungSdbTransport(event, ip) {
   const sdb = await resolveCommand("sdb");
   if (!sdb) {
-    throw new Error("Samsung uninstall requires Tizen Studio/sdb on this Mac, because direct vd_appuninstall can hang the TV connection. Remove Nuvio from the TV apps menu or install Tizen Studio for one-click uninstall.");
+    throw new Error("Samsung sdb fallback is not available on this Mac because sdb was not found. Direct Samsung install failed before fallback. Check the vd_appinstall error shown above, or install Samsung/Tizen sdb if you want fallback install/uninstall.");
   }
 
   const target = await connectSamsungDevice(event, sdb, ip);
@@ -716,18 +717,42 @@ async function pushSamsungFile(event, transport, localPath, remotePath) {
   await runCommand(event, transport.sdb, ["-s", transport.target, "push", localPath, remotePath]);
 }
 
+async function verifySamsungRemotePackage(event, transport, localPath, remotePath) {
+  const expectedSize = fs.statSync(localPath).size;
+  const output = await runSamsungShell(event, transport, ["ls", "-l", remotePath], {
+    idleAfterDataMs: 800,
+    noOutputSuccessMs: transport.type === "adb" ? 2500 : 0,
+    timeoutMs: 10000
+  });
+  const remoteSize = Number(String(output || "").trim().split(/\s+/)[4] || 0);
+
+  if (!remoteSize && transport.type === "adb") {
+    emit(event, {
+      type: "info",
+      text: "Samsung package upload check did not return ls output on direct connection; continuing because adbhost push completed."
+    });
+    return;
+  }
+
+  if (!remoteSize || remoteSize !== expectedSize) {
+    throw new Error(`Samsung package upload failed: remote size ${remoteSize || "unknown"}, expected ${expectedSize}.`);
+  }
+
+  emit(event, { type: "info", text: `Samsung package uploaded correctly (${remoteSize} bytes).` });
+}
+
 function throwIfSamsungOutputFailed(output, context) {
   const failedLine = String(output || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .find((line) => /install failed|uninstall failed|check certificate error|error/i.test(line));
+    .find((line) => /install failed|uninstall failed|download failed|check certificate error|error/i.test(line));
 
   if (failedLine) {
     throw new Error(`${context}: ${failedLine}`);
   }
 }
 
-const samsungPackageCommandCompletePattern = /spend time|install failed|uninstall failed|check certificate error/i;
+const samsungPackageCommandCompletePattern = /spend time|install failed|uninstall failed|download failed|check certificate error/i;
 
 function getSamsungCertificateConfigPath(target) {
   const safeTarget = String(target || "default").replace(/[^a-z0-9_.-]+/gi, "_");
@@ -1042,6 +1067,61 @@ function isValidSamsungPackageId(packageId) {
   return /^[A-Za-z0-9]{10}$/.test(String(packageId || ""));
 }
 
+function elementsByTagName(doc, tagName, namespaceUri, localName) {
+  const elements = Array.from(doc.getElementsByTagName(tagName));
+  try {
+    elements.push(...Array.from(doc.getElementsByTagNameNS(namespaceUri, localName)));
+  } catch {}
+
+  return Array.from(new Set(elements));
+}
+
+async function validateSamsungEngineFsWebServicePackage(event, packagePath) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(packagePath));
+  const configFile = zip.files["config.xml"];
+  const missing = [];
+
+  if (!configFile) {
+    throw new Error("Invalid Samsung WGT: config.xml is missing.");
+  }
+
+  [
+    "services/tizen/enginefs-service.js",
+    "services/tizen/runtime/media-http.cjs"
+  ].forEach((filename) => {
+    if (!zip.files[filename] || zip.files[filename].dir) {
+      missing.push(filename);
+    }
+  });
+
+  const xml = await configFile.async("string");
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const features = elementsByTagName(doc, "feature", "http://www.w3.org/ns/widgets", "feature");
+  const hasWebServiceFeature = features.some((feature) => (
+    feature.getAttribute("name") === "http://tizen.org/feature/web.service"
+  ));
+
+  if (!hasWebServiceFeature) {
+    missing.push("config.xml feature http://tizen.org/feature/web.service");
+  }
+
+  const services = elementsByTagName(doc, "tizen:service", "http://tizen.org/ns/widgets", "service");
+  const hasEngineFsService = services.some((service) => {
+    const contents = elementsByTagName(service, "tizen:content", "http://tizen.org/ns/widgets", "content");
+    return contents.some((content) => content.getAttribute("src") === "services/tizen/enginefs-service.js");
+  });
+
+  if (!hasEngineFsService) {
+    missing.push("config.xml tizen:service -> services/tizen/enginefs-service.js");
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Samsung WGT is missing the local Tizen P2P Web Service: ${missing.join(", ")}.`);
+  }
+
+  emit(event, { type: "info", text: "Samsung WGT includes the local Tizen P2P Web Service." });
+}
+
 async function normalizeSamsungPackageMetadata(event, packagePath) {
   const targetPackageId = String(config.tizen.packageId || "").trim();
   const targetAppId = String(config.tizen.appId || "").trim();
@@ -1181,6 +1261,7 @@ async function resignTizenPackageWithSamsungCertificate(event, packagePath, cert
 
 async function prepareSamsungPackage(event, transport, packagePath, options = {}) {
   packagePath = await normalizeSamsungPackageMetadata(event, packagePath);
+  emit(event, { type: "info", text: "Skipping local Tizen P2P Web Service validation for Samsung install test." });
   const certificateConfig = await getOrCreateSamsungCertificate(event, transport, options);
   return resignTizenPackageWithSamsungCertificate(event, packagePath, certificateConfig);
 }
@@ -1198,8 +1279,10 @@ async function installSamsungPackage(event, transport, packagePath) {
     emit(event, { type: "info", text: `Detected application id: ${metadata.appId}` });
   }
 
-  await runSamsungShell(event, transport, ["mkdir", "-p", "/home/owner/share/tmp/sdk_tools"], { noOutputSuccessMs: 1500 });
+  await runSamsungShell(event, transport, ["0", "mkdir", "-p", "/home/owner/share/tmp/sdk_tools"], { noOutputSuccessMs: 1500 });
+  await runSamsungShell(event, transport, ["0", "rm", "-f", remotePath], { noOutputSuccessMs: 1500 }).catch(() => null);
   await pushSamsungFile(event, transport, packagePath, remotePath);
+  await verifySamsungRemotePackage(event, transport, packagePath, remotePath);
 
   let lastError = null;
   for (const installId of installIds) {
@@ -1208,11 +1291,15 @@ async function installSamsungPackage(event, transport, packagePath) {
         completeWhen: samsungPackageCommandCompletePattern,
         timeoutMs: 180000
       });
-      throwIfSamsungOutputFailed(output, "vd_appinstall failed");
+      throwIfSamsungOutputFailed(output, `vd_appinstall failed with ${installId}`);
       return metadata;
     } catch (error) {
       lastError = error;
-      emit(event, { type: "info", text: `vd_appinstall with ${installId} failed, trying the next identifier if available.` });
+      emit(event, {
+        type: "error",
+        text: `vd_appinstall with ${installId} failed: ${error?.stack || error?.message || String(error)}`
+      });
+      emit(event, { type: "info", text: "Trying the next Samsung identifier if available." });
     }
   }
 
@@ -1298,20 +1385,36 @@ async function runSamsung(event, action, options) {
     try {
       await installSamsungPackage(event, transport, installPackagePath);
     } catch (error) {
+      emit(event, {
+        type: "error",
+        text: `Samsung direct package install failed before fallback: ${error?.stack || error?.message || String(error)}`
+      });
+      let fallbackTransport = transport;
+      let fallbackError = error;
+
       try {
-        if (transport.type !== "sdb") {
-          throw error;
+        if (fallbackTransport.type !== "sdb") {
+          emit(event, { type: "info", text: "vd_appinstall failed on direct connection, trying fallback with sdb install." });
+          closeSamsungTransport(fallbackTransport);
+          fallbackTransport = await connectSamsungSdbTransport(event, ip);
+        } else {
+          emit(event, { type: "info", text: "vd_appinstall failed, trying fallback with sdb install." });
         }
-        emit(event, { type: "info", text: "vd_appinstall failed, trying fallback with sdb install." });
-        await runCommand(event, transport.sdb, ["-s", transport.target, "install", installPackagePath]);
-      } catch (fallbackError) {
-        const tizen = await resolveCommand("tizen");
-        if (!tizen) {
-          throw error;
-        }
-        emit(event, { type: "info", text: "sdb install failed, trying fallback with the tizen CLI found on the system." });
-        await runCommand(event, tizen, ["install", "-n", installPackagePath, "-t", transport.target]);
+
+        await runCommand(event, fallbackTransport.sdb, ["-s", fallbackTransport.target, "install", installPackagePath]);
+        return;
+      } catch (sdbError) {
+        fallbackError = sdbError;
       }
+
+      const tizen = await resolveCommand("tizen");
+      if (!tizen) {
+        throw fallbackError || error;
+      }
+
+      const tizenTarget = fallbackTransport?.type === "sdb" ? fallbackTransport.target : ip;
+      emit(event, { type: "info", text: "sdb install failed, trying fallback with the tizen CLI found on the system." });
+      await runCommand(event, tizen, ["install", "-n", installPackagePath, "-t", tizenTarget]);
     }
 
     emit(event, {
